@@ -1,0 +1,247 @@
+<html>
+    <head>
+         <script type="text/javascript" src="kdtree.js"></script>
+         <script type="text/javascript">
+
+var canvas,context;
+var pts,bounds,rootNode;
+var sceneMin=[Infinity,Infinity,-1];
+var sceneMax=[-Infinity,-Infinity,1];
+var drag={x1:0,y1:0,x2:0,y2:0},colPt=[0,0],treeDrawInfo,lmbDown=false;
+
+window.requestAnimFrame =
+    window.requestAnimationFrame ||
+    window.webkitRequestAnimationFrame ||
+    window.mozRequestAnimationFrame ||
+    window.oRequestAnimationFrame ||
+    window.msRequestAnimationFrame ||
+    (function(c,e){window.setTimeout(c,1000/60)});
+
+function onAnimate() {
+    render();
+    window.requestAnimFrame(onAnimate);
+}
+
+function intersectInsideBox(P,V,invV,bMin,bMax) {
+    var tnear=new Array(2);
+    var tfar=new Array(2);
+
+    for(var i=0;i<2;i++) {
+        var tmin = (bMin[i]-P[i])*invV[i];
+        var tmax = (bMax[i]-P[i])*invV[i];
+
+        tnear[i] = Math.min(tmin,tmax);
+        tfar[i] = Math.max(tmin,tmax);
+    }
+
+    var enter = Math.max(tnear[0], tnear[1]);
+    var exit = Math.min(tfar[0], tfar[1]);
+
+    return (exit > Math.max(enter, 0.0))?exit:null;
+}
+
+function intersectCircle(P,V,invV,ind){
+    var r=pts[ind].r;
+    var C=[pts[ind].x,pts[ind].y];
+    var M=[P[0]-C[0],P[1]-C[1]];
+
+    var c=M[0]*M[0]+M[1]*M[1]-r*r;
+    var b=V[0]*M[0]+V[1]*M[1];
+    var d=b*b-c;
+
+    //inside sphere,
+    //or ray pointing away from sphere when on or outside sphere (c>=0),
+    //or no real roots (ray pointing towards, but misses)
+    if(c<0.0 || b > 0.0 || d < 0.0) {
+        return null;
+    }
+
+    return -b-Math.sqrt(d);
+}
+
+window.onload =(function(){
+    canvas = document.getElementById('canvas');
+    context = canvas.getContext('2d');
+
+    initScene();
+    rootNode=kdtree.build(bounds,sceneMin,sceneMax,0);
+    initTreeDrawInfo();
+	initEventListeners();
+    onAnimate();
+});
+
+function initEventListeners() {
+    canvas.addEventListener("mousedown", (function(event){
+        if(event.button == 0) {
+            lmbDown=true;
+            var bc = canvas.getBoundingClientRect();
+            var x1=event.clientX-bc.left;// canvas.offsetLeft;
+            var y1=event.clientY-bc.top;// canvas.offsetTop;
+            drag={x1:x1,y1:y1,x2:x1,y2:y1};
+        }
+    }), false);
+
+    window.addEventListener("mousemove", (function(event){
+        if(lmbDown) {
+            var bc = canvas.getBoundingClientRect();
+            var x2=event.clientX-bc.left;// canvas.offsetLeft;
+            var y2=event.clientY-bc.top;// canvas.offsetTop;
+            drag.x2=x2;
+            drag.y2=y2;
+        }
+    }), false);
+
+    window.addEventListener("mouseup", (function(event){
+        if(event.button == 0) {
+            lmbDown=false;
+
+            var P=[drag.x1,drag.y1,0];
+            var V=[drag.x2-drag.x1,drag.y2-drag.y1,0];
+            var l=Math.sqrt(V[0]*V[0]+V[1]*V[1]);
+            V[0]/=l;
+            V[1]/=l;
+            var invV=[1.0/V[0],1.0/V[1],1.0/V[2]];
+
+            var t=kdtree.intersect(rootNode,P,V,invV,sceneMin,sceneMax,intersectCircle);
+
+            if(t!=Infinity) {
+                colPt=[P[0]+V[0]*t,P[1]+V[1]*t];
+            } else {
+                t=intersectInsideBox(P,V,invV,[0,0],[canvas.width,canvas.height]);
+                colPt=[P[0]+V[0]*t,P[1]+V[1]*t];
+            }
+        }
+    }), false);
+}
+
+function initScene() {
+    var ptsNum=50;
+    bounds = new Array(ptsNum);
+    pts = new Array(ptsNum);
+    
+    for(var i=0;i<ptsNum;i++) {
+        var x,y,r,stop=false;
+
+        while(!stop) {
+            x=Math.random()*(canvas.width-50)+25;
+            y=Math.random()*(canvas.height-50)+25;
+
+            //
+            r=5.0+Math.random()*20;;
+
+            stop=true;
+
+            for(var j=0;j<i;j++) {
+                var a=Math.pow(x-pts[j].x,2)+Math.pow(y-pts[j].y,2);
+                var b=Math.pow(r,2)+Math.pow(pts[j].r,2);
+                
+                if(a<b*3) {
+                    stop=false;
+                }
+            }
+        }
+
+        var x1=x-r;
+        var x2=x+r;
+        var y1=y-r;
+        var y2=y+r;
+
+        sceneMin[0]=Math.min(sceneMin[0],x1);
+        sceneMin[1]=Math.min(sceneMin[1],y1);
+        sceneMax[0]=Math.max(sceneMax[0],x2);
+        sceneMax[1]=Math.max(sceneMax[1],y2);
+        
+        bounds[i]={min:[x1, y1,-1], max:[x2, y2,1]};//[x,y,0.0];
+        pts[i]={x:x,y:y,r:r};
+    }
+}
+
+function initTreeDrawInfo() {
+    var stk=[{node:rootNode,min:[0,0,0],max:[canvas.width,canvas.height,1],branchType:"root",depth:0}];
+    treeDrawInfo=[];
+
+    while(stk.length>0) {
+        var b=stk.pop();
+        var a=b.node;
+
+        if(a.type==null) {console.log("nulltype "+a);/*debug*/}
+
+        if(a.type!=3) {
+            if(a.left!=null) {
+                stk.push({node:a.left,min:[b.min[0],b.min[1],b.min[2]],max:[b.max[0],b.max[1],b.max[2]],branchType:"left",depth:b.depth+1});
+                stk[stk.length-1].max[a.type]=a.split;
+            }
+
+            if(a.right!=null) {
+                stk.push({node:a.right,min:[b.min[0],b.min[1],b.min[2]],max:[b.max[0],b.max[1],b.max[2]],branchType:"right",depth:b.depth+1});
+                stk[stk.length-1].min[a.type]=a.split;
+            }
+
+            var rnd=Math.random() * 360;
+            var c="hsla(" + rnd + ", 100%, 35%,0.75)";
+
+            if(a.type==1) {
+                treeDrawInfo.push([b.min[0],a.split,b.max[0],a.split,c]);
+            } else if(a.type==0) {
+                treeDrawInfo.push([a.split,b.min[1],a.split,b.max[1],c]);
+            }
+        }
+    }
+}
+
+function render() {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+
+    //draw lines
+    for(var i=0;i<treeDrawInfo.length;i++) {
+        drawLine(treeDrawInfo[i][0],treeDrawInfo[i][1],treeDrawInfo[i][2],treeDrawInfo[i][3],treeDrawInfo[i][4]);
+    }
+
+    for(var i=0;i<pts.length;i++) {
+        drawPoint(pts[i].x,pts[i].y,pts[i].r-1,"rgba(110,110,110,122)");
+    }
+
+    //draw line drag
+    if(lmbDown) {
+        drawLine(drag.x1,drag.y1,drag.x2,drag.y2,"pink");
+    } else {
+        drawLine(drag.x1,drag.y1,colPt[0],colPt[1],"red");
+    }
+}
+
+function drawPoint(x,y,r,c) {
+    context.beginPath();
+    context.arc(x, y, r, 0, 2 * Math.PI, false);
+    context.lineWidth = 1;
+    context.strokeStyle = c;
+    context.stroke();
+}
+
+function drawLine(x1,y1,x2,y2,c) {
+    context.fillStyle = c;
+
+    context.strokeStyle = c;
+    context.lineWidth = 1;
+
+    context.beginPath();
+    context.moveTo(x1,y1);
+    context.lineTo(x2,y2);
+    context.stroke();
+
+    context.beginPath();
+    context.arc(x1, y1, 2, 0, 2 * Math.PI, false);
+    context.fill();
+
+    context.beginPath();
+    context.arc(x2, y2, 2, 0, 2 * Math.PI, false);
+    context.fill();
+}
+
+         </script>  
+    </head>
+    <body>
+        <canvas id="canvas" width="512" height="512"  style="border:1px solid #000000;"></canvas>    
+        <p>refresh the page to generate a new scene</p>
+        <p>drag the mouse cursor and let go to shoot a ray</p>
+    </body>
+</html>
